@@ -29,12 +29,12 @@ If `$ARGUMENTS` is empty, ask for the context name before running these commands
 
 ## File naming
 
-Pattern: `<NAME>_<STAGE>_<DATE>.md`, saved in `$ROOT`.
+Pattern: `<DATE>_<NAME>_<STAGE>.md`, saved in `$ROOT`.
 
 - All uppercase
+- DATE: captured from `date +%Y%m%d` **at invocation time** — the same value used for all 3 files (prefix for chronological sorting)
 - NAME: from `$ARGUMENTS`, uppercased, spaces → underscores (computed above)
 - STAGE: `01_RESEARCH`, `02_DRAFT`, or `03_PLAN`
-- DATE: captured from `date +%Y%m%d` **at invocation time** — the same value used for all 3 files
 
 ## Workflow
 
@@ -50,7 +50,7 @@ Plan Progress:
 
 ---
 
-### Stage 1 — Research → `<NAME>_01_RESEARCH_<DATE>.md`
+### Stage 1 — Research → `<DATE>_<NAME>_01_RESEARCH.md`
 
 Explore the project thoroughly before writing anything:
 
@@ -83,7 +83,7 @@ Write the research file:
 
 ---
 
-### Stage 2 — Draft → `<NAME>_02_DRAFT_<DATE>.md`
+### Stage 2 — Draft → `<DATE>_<NAME>_02_DRAFT.md`
 
 Produce the first version of the plan using the research findings.
 
@@ -120,47 +120,92 @@ Each task must have: **Goal**, **Approach**, and **Acceptance criteria**.
 
 ### Stage 3 — Specialist Review (annotate the draft in-place)
 
-Three specialists review `02_DRAFT` independently. Append a `## Specialist Reviews` section to the **draft file** — do not create a new file for this stage.
+Three specialists review `02_DRAFT` independently. Launch all three as **parallel subagents** using `model: sonnet`. Each subagent reads the draft, inserts inline comments throughout the document at the precise locations they refer to, and returns a short summary. Wait for all three to complete, then merge the annotated drafts and append the summaries.
+
+#### Inline comment format
+
+Each comment is a blockquote immediately after the line or paragraph it addresses, tagged with the persona letter:
+
+```markdown
+> **[A]** The proposed singleton here creates tight coupling — consider a protocol-based injection instead.
+
+> **[B]** This task has no rollback path if the migration fails mid-way.
+
+> **[C]** This task is underspecified — acceptance criteria don't cover the error state.
+```
+
+Comments must be placed **directly after** the specific sentence, task, heading, or list item they concern — not grouped at the top or bottom of a section.
+
+#### Launching subagents
+
+Spawn three agents in a single message (parallel), each with `model: sonnet` and a self-contained prompt that includes:
+- The absolute path to the draft file (read it first)
+- The persona role and focus areas below
+- Instruction to return the **full file content** with inline `> **[X]**` comments inserted at the exact locations they refer to
+- Instruction to also return a short summary block (3–6 bullet points) at the end of the response, separated by `---SUMMARY---`
 
 #### [A] Architecture Engineer
 Focuses on: scalability, design patterns, coupling, extensibility, system boundaries.
 
-Add `### [A] Architecture Review` with:
-- Pattern choices and their trade-offs
-- Scalability or coupling concerns
-- Suggested structural changes
+Annotates inline wherever pattern choices, coupling risks, or structural concerns arise. Summary covers the top architectural findings only.
 
 #### [B] Staff Engineer
 Focuses on: performance, code quality, testability, maintainability, key trade-offs, risks.
 
-Add `### [B] Staff Engineer Review` with:
-- Performance hotspots or regressions introduced
-- Code quality and testability concerns
-- Concrete risk mitigations
+Annotates inline wherever performance hotspots, quality gaps, or risk blind spots appear. Summary covers the top quality/risk findings only.
 
 #### [C] Engineering Manager
 Focuses on: does the plan solve the real problem? Does it deliver proportional value to users and the project?
 
-Add `### [C] Engineering Manager Review` with:
-- Alignment with the user's actual stated need
-- Value vs effort assessment
-- Scope creep flags or missing scope
-- Prioritization or sequencing suggestions
+Annotates inline wherever scope, effort, or alignment with user needs is in question. Summary covers value vs effort and any sequencing concerns.
+
+#### Collecting results
+
+1. Each subagent returns an annotated version of the full file plus a `---SUMMARY---` block.
+2. Merge all three sets of inline comments into the draft file. Where multiple personas comment on the same location, stack their blockquotes in A → B → C order.
+3. Append a `## Specialist Reviews` section to the draft file containing only the three summaries:
+
+```markdown
+## Specialist Reviews
+
+### [A] Architecture Engineer
+- <bullet from summary>
+
+### [B] Staff Engineer
+- <bullet from summary>
+
+### [C] Engineering Manager
+- <bullet from summary>
+```
 
 ---
 
-### Stage 4 — Final Plan → `<NAME>_03_PLAN_<DATE>.md`
+### Stage 4 — Final Plan → `<DATE>_<NAME>_03_PLAN.md`
 
-Consolidate all specialist annotations into the best possible plan.
-Resolve reviewer conflicts; prefer the more conservative risk posture when uncertain.
-Tasks that are out of scope but valuable should be preserved in a "Future" section.
+Spawn a **single subagent with `model: opus`** to produce the final plan. This is a senior architect synthesizing everything — it must read the fully annotated draft (inline comments + summaries) and produce the best possible implementation approach, not a mechanical merge.
+
+#### Subagent prompt must include
+
+- Absolute path to the annotated draft file (read it first)
+- The context name and original user request
+- The instructions below
+
+#### Subagent instructions
+
+1. Read every inline `> **[A/B/C]**` comment in the draft. Treat them as expert input, not directives — where reviewers conflict, choose the approach with the better risk/value tradeoff and explain why.
+2. For each task, synthesize the best implementation approach considering all reviewer angles (architecture soundness, code quality, and user value). Don't average opinions — pick the strongest path and justify it in **Review notes**.
+3. Prefer the more conservative risk posture when uncertain.
+4. Preserve deferred but valuable items in a `## Future` section.
+5. Write the final plan file at the path provided, using the structure below.
+
+#### Output file structure
 
 ```markdown
 # Technical Plan: <context name>
 _Date: <DATE value captured at invocation>_
 
 ## Objective
-[refined from draft after review]
+[refined from draft, sharpened by reviewer input]
 
 ## Scope
 **In scope:** ...
@@ -175,23 +220,23 @@ _Date: <DATE value captured at invocation>_
 
 ### Task N — <title>
 **Goal:** ...
-**Approach:** ...
+**Approach:** [best synthesized approach — concrete and actionable]
 **Acceptance criteria:** ...
-**Review notes:** [key input from specialists, if any]
+**Review notes:** [which reviewer inputs shaped this task and how conflicts were resolved]
 
 [repeat]
 
 ## Execution order
-[finalized with rationale]
+[finalized with rationale from architectural and risk considerations]
 
 ## Risks & mitigations
-[consolidated from all three reviewers]
+[consolidated from all three reviewers, deduplicated, ordered by severity]
 
 ## Future / out of scope
 [deferred but valuable items worth tracking]
 
 ## Review delta
-[1–3 sentences on what changed most between draft and final plan, and why]
+[2–4 sentences on what changed most from draft to final, which reviewer had the most impact, and why]
 ```
 
 ---
